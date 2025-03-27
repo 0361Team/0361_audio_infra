@@ -1,0 +1,53 @@
+project:
+  name: lecture2quiz
+  id: 0361-whisper-project
+  region: asia-northeast3
+  environment: development
+
+services:
+  whisperx:
+    name: audio-transcription-service
+    version: 1.0.0
+
+    audio:
+      bucket:
+        name: lecture-audio-files
+        path_prefix: uploads/
+
+    transcript:
+      bucket:
+        name: lecture-transcripts
+        path_prefix: transcripts/
+
+    processing:
+      model:
+        name: whisper
+        size: medium
+        language: ko
+
+      max_audio_duration: 3600  # 최대 1시간 오디오 처리
+
+    logging:
+      level: INFO
+      format: json
+
+    resources:
+      cpu: 2
+      memory: 4Gi
+
+    scaling:
+      min_instances: 1
+      max_instances: 5
+
+    timeouts:
+      request: 900  # 15분
+
+cloud:
+  provider: gcp
+  compute:
+    type: cloud-run
+
+authentication:
+  service_account:
+    name: whisper-processor
+    key_path: ./gcp-key.json

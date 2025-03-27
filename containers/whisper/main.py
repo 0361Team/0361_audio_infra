@@ -1,4 +1,3 @@
-# src/whisperx/app.py
 import os
 import logging
 from fastapi import FastAPI, Request
@@ -6,18 +5,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import time
 
-from .api import router as api_router
+from src.api import router as api_router  # 임포트 경로 수정
 
 # 로깅 설정
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger("whisperx")
+logger = logging.getLogger("faster-whisper")
 
 # FastAPI 애플리케이션 생성
 app = FastAPI(
-    title="WhisperX API",
+    title="Faster-Whisper API",
     description="강의 오디오 트랜스크립션 서비스 API",
     version="1.0.0",
     docs_url="/docs",
@@ -60,11 +59,11 @@ async def global_exception_handler(request: Request, exc: Exception):
 # 루트 엔드포인트
 @app.get("/")
 async def root():
-    return {"message": "WhisperX 오디오 트랜스크립션 API에 오신 것을 환영합니다", "version": "1.0.0"}
+    return {"message": "Faster-Whisper 오디오 트랜스크립션 API에 오신 것을 환영합니다", "version": "1.0.0"}
 
 
 # FastAPI를 직접 실행하는 경우
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))
-    uvicorn.run("src.whisperx.app:app", host="0.0.0.0", port=port, reload=True)
+    uvicorn.run("src.app:app", host="0.0.0.0", port=port, reload=True)

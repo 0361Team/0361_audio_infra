@@ -23,7 +23,7 @@ gcloud services enable \
 
 # Artifact Registry 저장소 생성 (아직 없는 경우)
 echo "Artifact Registry 저장소 설정 중..."
-gcloud artifacts repositories create whisperx-repo \
+gcloud artifacts repositories create whisper-repo \
   --repository-format=docker \
   --location=$REGION \
   --description="WhisperX 컨테이너 이미지 저장소" \

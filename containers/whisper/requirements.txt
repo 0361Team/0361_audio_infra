@@ -1,0 +1,16 @@
+# Faster Whisper 및 의존성
+faster-whisper==0.10.0
+ffmpeg-python==0.2.0
+
+# 웹 서버 및 API
+fastapi==0.105.0
+uvicorn[standard]==0.24.0
+pydantic==2.4.2
+
+# GCP 통합 (필요한 경우)
+google-cloud-storage==2.9.0
+google-cloud-pubsub==2.18.0
+
+# 유틸리티
+python-multipart==0.0.7
+python-dotenv==1.0.0
