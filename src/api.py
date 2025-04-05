@@ -3,13 +3,10 @@ import uuid
 import base64
 import logging
 import tempfile
-import uuid
-from fastapi import File, UploadFile, BackgroundTasks, Form
-from typing import Optional
-from pathlib import Path
-from typing import Dict, Any
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Header
+from typing import Dict, Any, Optional
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Header, File, UploadFile, Form
 from fastapi.responses import JSONResponse
+from pathlib import Path
 
 from src.models import (
     PubSubEnvelope,
@@ -18,10 +15,11 @@ from src.models import (
     HealthResponse,
     StatusEnum
 )
-from .processor import process_audio_file,process_uploaded_file
+from .processor import process_audio_file, process_uploaded_file
+from .websocket import WebSocketManager
 
 # 로깅 설정
-logger = logging.getLogger("faster-whisper.api")
+logger = logging.getLogger("whisperlive.api")
 
 # API 버전
 API_VERSION = "v1"
@@ -243,6 +241,43 @@ async def get_transcription_result(request_id: str):
             "transcript_location": result.get("transcript_location")
         }
     )
+
+
+@router.get("/session/{session_id}")
+async def get_session_result(session_id: str):
+    """
+    WebSocket 세션의 트랜스크립션 결과 조회
+
+    - session_id: WebSocket 세션 ID
+    - 응답: 세션에서 생성된 모든 트랜스크립션 결과
+    """
+    # 로컬 파일에서 세션 결과 읽기
+    try:
+        output_dir = "transcripts"
+        output_file = Path(output_dir) / f"{session_id}.json"
+
+        if not output_file.exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"세션 ID의 트랜스크립션 결과를 찾을 수 없습니다: {session_id}"
+            )
+
+        with open(output_file, "r", encoding="utf-8") as f:
+            result = json.load(f)
+
+        return JSONResponse(
+            status_code=200,
+            content=result
+        )
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        logger.error(f"세션 결과 조회 중 오류 발생: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"세션 결과 처리 중 오류가 발생했습니다: {str(e)}"
+        )
+
 
 @router.get("/health", response_model=HealthResponse)
 async def health_check():

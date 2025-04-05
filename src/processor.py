@@ -3,45 +3,70 @@ import json
 import time
 import tempfile
 import logging
-from pathlib import Path
 import traceback
-from typing import Dict, Any, Optional, Union
+from pathlib import Path
 import asyncio
-from faster_whisper import WhisperModel
+from typing import Dict, Any, Optional
+import numpy as np
+
+# WhisperLive 모듈 임포트
+from whisperlive.transcriber import WhisperLiveASR
+from whisperlive.audio_processing import AudioProcessor
+
 from google.cloud import storage
 from google.oauth2 import service_account
 
 # 로깅 설정
-logger = logging.getLogger("faster-whisper.processor")
+logger = logging.getLogger("whisperlive.processor")
 
 # 환경 변수
 TRANSCRIPT_BUCKET = os.environ.get('TRANSCRIPT_BUCKET')
 MODEL_SIZE = os.environ.get('MODEL_SIZE', 'medium')
 COMPUTE_TYPE = os.environ.get('COMPUTE_TYPE', 'float16')
+LANGUAGE = os.environ.get('LANGUAGE', 'ko')
 
-# GCP 클라이언트 초기화
-credentials = service_account.Credentials.from_service_account_file(Path().parent/Path('lecture2quiz-3c060176783f.json'))
-storage_client = storage.Client(project='lecture2quiz', credentials=credentials)
+# GCP 클라이언트 초기화 (필요시)
+try:
+    if os.path.exists(os.path.join(Path(__file__).parent.parent, 'lecture2quiz-3c060176783f.json')):
+        credentials = service_account.Credentials.from_service_account_file(
+            os.path.join(Path(__file__).parent.parent, 'lecture2quiz-3c060176783f.json')
+        )
+        storage_client = storage.Client(project='lecture2quiz', credentials=credentials)
+    else:
+        storage_client = storage.Client()
+except Exception as e:
+    logger.warning(f"GCP 스토리지 클라이언트 초기화 실패: {e}. 로컬 저장소만 사용됩니다.")
+    storage_client = None
 
 # 모델 인스턴스
 model = None
+audio_processor = None
 
 # 트랜스크립션 결과 저장을 위한 인메모리 저장소
 transcription_results = {}
 
 
-
 def load_model():
-    """Faster Whisper 모델 로드 (지연 초기화)"""
-    global model
+    """WhisperLive 모델 로드 (지연 초기화)"""
+    global model, audio_processor
     if model is None:
-        device = "cuda" if os.environ.get("CUDA_VISIBLE_DEVICES") else "cpu"
-        logger.info(f"Faster-Whisper 모델 로드 중 (장치: {device}, 모델 크기: {MODEL_SIZE})")
-        compute_type = COMPUTE_TYPE
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        logger.info(f"WhisperLive 모델 로드 중 (장치: {device}, 모델 크기: {MODEL_SIZE})")
+
         # 모델 초기화
-        model = WhisperModel(MODEL_SIZE, device=device, compute_type=compute_type)
-        logger.info("Faster-Whisper 모델 로드 완료")
-    return model
+        model = WhisperLiveASR(
+            model_name=MODEL_SIZE,
+            device=device,
+            compute_type=COMPUTE_TYPE,
+            language=LANGUAGE
+        )
+
+        # 오디오 처리기 초기화
+        audio_processor = AudioProcessor(sample_rate=16000)
+
+        logger.info("WhisperLive 모델 로드 완료")
+    return model, audio_processor
 
 
 # 모델 미리 로드 (선택적)
@@ -54,6 +79,9 @@ except Exception as e:
 async def download_audio(bucket_name: str, object_name: str) -> str:
     """Cloud Storage에서 오디오 파일 다운로드 (비동기)"""
     try:
+        if not storage_client:
+            raise ValueError("스토리지 클라이언트가 초기화되지 않았습니다")
+
         bucket = storage_client.bucket(bucket_name)
         blob = bucket.blob(object_name)
 
@@ -82,6 +110,23 @@ async def upload_transcript(
 ) -> str:
     """트랜스크립션 결과를 Cloud Storage에 업로드 (비동기)"""
     try:
+        if not storage_client or not TRANSCRIPT_BUCKET:
+            # 로컬 저장
+            output_dir = "transcripts"
+            os.makedirs(output_dir, exist_ok=True)
+
+            base_name = Path(object_name).stem
+            if session_id:
+                output_file = os.path.join(output_dir, f"{session_id}_{base_name}.json")
+            else:
+                output_file = os.path.join(output_dir, f"{base_name}.json")
+
+            with open(output_file, "w", encoding="utf-8") as f:
+                json.dump(transcript_data, f, ensure_ascii=False, indent=2)
+
+            logger.info(f"트랜스크립션 결과 로컬 저장 완료: {output_file}")
+            return output_file
+
         # 원본 파일명에서 확장자 제거 후 .json 추가
         base_name = Path(object_name).stem
 
@@ -123,59 +168,51 @@ async def upload_transcript(
 
 
 async def process_audio(audio_file_path: str) -> Dict[str, Any]:
-    """Faster-Whisper를 사용하여 오디오 파일 처리 (비동기 래퍼)"""
+    """WhisperLive를 사용하여 오디오 파일 처리 (비동기 래퍼)"""
     try:
         logger.info(f"오디오 파일 처리 중: {audio_file_path}")
 
         # 모델 로드
-        whisper_model = load_model()
+        whisper_model, audio_proc = load_model()
+
+        # 오디오 파일을 numpy 배열로 변환
+        audio_data = await asyncio.to_thread(
+            audio_proc.load_audio_file, audio_file_path
+        )
+
+        # WhisperLive는 스트리밍 처리를 위해 설계되었지만, 비스트리밍 방식으로도 사용 가능
+        # (이 경우 전체 오디오를 처리)
+        whisper_model.reset_state()  # 상태 초기화
 
         # 처리 로직을 스레드 풀에서 실행 (CPU/GPU 바운드 작업)
         loop = asyncio.get_event_loop()
 
-        # Faster-Whisper는 segments와 info를 반환합니다.
-        segments_generator, info = await loop.run_in_executor(
+        # 오디오 처리
+        result = await loop.run_in_executor(
             None,
-            lambda: whisper_model.transcribe(
-                audio_file_path,
-                language="ko",  # 한국어 처리 (자동 감지도 가능)
-                beam_size=5,
-                vad_filter=True,
-                vad_parameters=dict(min_silence_duration_ms=500)
-            )
+            lambda: whisper_model.inference(audio_data, is_final=True)
         )
 
-        # 세그먼트 처리
+        # 세그먼트 리스트 작성
         segments_list = []
-        full_text = ""
-
-        # 세그먼트 목록을 생성하고 전체 텍스트 구성
-        for segment in segments_generator:
+        for i, segment in enumerate(result.get("segments", [])):
             segment_dict = {
-                "id": len(segments_list),
-                "start": segment.start,
-                "end": segment.end,
-                "text": segment.text.strip(),
-                # word-level 타임스탬프가 있는 경우
-                "words": [
-                    {"word": word.word, "start": word.start, "end": word.end, "probability": word.probability}
-                    for word in (segment.words or [])
-                ]
+                "id": i,
+                "start": segment.get("start", 0),
+                "end": segment.get("end", 0),
+                "text": segment.get("text", "").strip(),
             }
-
             segments_list.append(segment_dict)
-            full_text += segment.text + " "
 
-        # WhisperX 포맷 유지를 위한 결과 구성
-        result = {
+        # 결과 구성
+        transcript_result = {
             "segments": segments_list,
-            "language": info.language,
-            "text": full_text.strip(),
-            "language_probability": info.language_probability
+            "language": LANGUAGE,
+            "text": result.get("text", ""),
         }
 
-        logger.info(f"트랜스크립션 완료! 감지된 언어: {info.language}")
-        return result
+        logger.info(f"트랜스크립션 완료!")
+        return transcript_result
     except Exception as e:
         logger.error(f"오디오 처리 오류: {e}")
         logger.error(traceback.format_exc())
@@ -189,9 +226,6 @@ async def process_audio_file(
         request_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """오디오 파일 처리 워크플로우 (백그라운드 태스크용)"""
-    if not TRANSCRIPT_BUCKET:
-        raise ValueError("환경 변수 TRANSCRIPT_BUCKET이 설정되지 않았습니다")
-
     start_time = time.time()
     local_file_path = None
 
@@ -220,9 +254,13 @@ async def process_audio_file(
             "status": "success",
             "message": "오디오 처리 완료",
             "request_id": request_id,
-            "transcript_location": f"gs://{TRANSCRIPT_BUCKET}/{transcript_name}",
-            "processing_time_seconds": processing_time
+            "transcript_location": f"gs://{TRANSCRIPT_BUCKET}/{transcript_name}" if TRANSCRIPT_BUCKET else transcript_name,
+            "processing_time_seconds": processing_time,
+            "result": transcript_result
         }
+
+        # 결과 저장
+        transcription_results[request_id] = result
 
         logger.info(f"처리 완료: {object_name} ({processing_time:.2f}초)")
         return result
@@ -232,18 +270,24 @@ async def process_audio_file(
         logger.error(traceback.format_exc())
 
         # 오류 정보 반환
-        return {
+        error_result = {
             "status": "error",
             "message": "오디오 처리 중 오류 발생",
             "request_id": request_id,
             "error_details": str(e),
             "processing_time_seconds": time.time() - start_time
         }
+
+        # 오류 정보 저장
+        transcription_results[request_id] = error_result
+
+        return error_result
     finally:
         # 임시 파일 정리
         if local_file_path and os.path.exists(local_file_path):
             os.remove(local_file_path)
             logger.info(f"임시 파일 제거: {local_file_path}")
+
 
 async def process_uploaded_file(
         file_path: str,
@@ -257,52 +301,8 @@ async def process_uploaded_file(
     try:
         logger.info(f"업로드된 오디오 처리 중: {file_path} (요청 ID: {request_id})")
 
-        # 모델 로드
-        whisper_model = load_model()
-
-        # 처리 로직을 스레드 풀에서 실행
-        loop = asyncio.get_event_loop()
-
-        # Faster-Whisper 실행
-        segments_generator, info = await loop.run_in_executor(
-            None,
-            lambda: whisper_model.transcribe(
-                file_path,
-                language=language if language else "ko",  # 기본 한국어 처리
-                beam_size=beam_size,
-                vad_filter=True,
-                vad_parameters=dict(min_silence_duration_ms=500)
-            )
-        )
-
-        # 세그먼트 처리
-        segments_list = []
-        full_text = ""
-
-        # 세그먼트 목록을 생성하고 전체 텍스트 구성
-        for segment in segments_generator:
-            segment_dict = {
-                "id": len(segments_list),
-                "start": segment.start,
-                "end": segment.end,
-                "text": segment.text.strip(),
-                "words": [
-                    {"word": word.word, "start": word.start, "end": word.end,
-                     "probability": word.probability}
-                    for word in (segment.words or [])
-                ]
-            }
-
-            segments_list.append(segment_dict)
-            full_text += segment.text + " "
-
-        # 결과 구성
-        transcript_result = {
-            "segments": segments_list,
-            "language": info.language,
-            "text": full_text.strip(),
-            "language_probability": info.language_probability
-        }
+        # 오디오 처리
+        transcript_result = await process_audio(file_path)
 
         # 결과 파일 이름 생성
         base_name = f"upload_{request_id}"
@@ -310,7 +310,7 @@ async def process_uploaded_file(
 
         # GCS가 설정된 경우 결과 업로드
         transcript_location = None
-        if TRANSCRIPT_BUCKET:
+        if storage_client and TRANSCRIPT_BUCKET:
             try:
                 bucket = storage_client.bucket(TRANSCRIPT_BUCKET)
                 blob = bucket.blob(result_file_name)
@@ -325,6 +325,17 @@ async def process_uploaded_file(
             except Exception as e:
                 logger.error(f"트랜스크립션 결과 업로드 오류: {e}")
                 # 업로드 실패 시에도 계속 진행
+        else:
+            # 로컬 저장
+            output_dir = "transcripts"
+            os.makedirs(output_dir, exist_ok=True)
+            output_file = os.path.join(output_dir, result_file_name)
+
+            with open(output_file, "w", encoding="utf-8") as f:
+                json.dump(transcript_result, f, ensure_ascii=False, indent=2)
+
+            transcript_location = output_file
+            logger.info(f"트랜스크립션 결과 로컬 저장 완료: {output_file}")
 
         # 처리 시간 계산
         processing_time = time.time() - start_time
@@ -339,7 +350,7 @@ async def process_uploaded_file(
             "result": transcript_result
         }
 
-        # 인메모리 저장소에 결과 저장 (실제 구현에서는 DB 사용 권장)
+        # 인메모리 저장소에 결과 저장
         transcription_results[request_id] = result
 
         logger.info(f"업로드된 오디오 처리 완료: ({processing_time:.2f}초)")

@@ -58,6 +58,32 @@ class AudioProcessingResponse(BaseModel):
     error_details: Optional[str] = Field(None, description="오류 발생 시 상세 내용")
 
 
+class WebSocketConnectionInfo(BaseModel):
+    """WebSocket 연결 정보"""
+    session_id: str = Field(..., description="WebSocket 세션 ID")
+    client_info: Optional[Dict[str, Any]] = Field(None, description="클라이언트 정보")
+
+
+class AudioStreamChunk(BaseModel):
+    """오디오 스트림 청크 정보"""
+    session_id: str = Field(..., description="세션 ID")
+    sequence: int = Field(..., description="청크 시퀀스 번호")
+    is_final: bool = Field(False, description="최종 청크 여부")
+    audio_format: str = Field("PCM", description="오디오 포맷 (PCM, WAV 등)")
+    sample_rate: int = Field(16000, description="샘플링 레이트")
+    num_channels: int = Field(1, description="채널 수")
+
+
+class TranscriptionStreamResult(BaseModel):
+    """실시간 트랜스크립션 스트림 결과"""
+    session_id: str = Field(..., description="세션 ID")
+    sequence: int = Field(..., description="결과 시퀀스 번호")
+    is_final: bool = Field(False, description="최종 결과 여부")
+    text: str = Field("", description="현재까지의 트랜스크립션 텍스트")
+    segments: List[Dict[str, Any]] = Field([], description="세그먼트 정보")
+    language: Optional[str] = Field(None, description="감지된 언어")
+
+
 class HealthResponse(BaseModel):
     """서비스 헬스 체크 응답"""
     status: str = Field("healthy", description="서비스 상태")
