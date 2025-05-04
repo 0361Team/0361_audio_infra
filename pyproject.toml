@@ -1,0 +1,21 @@
+[project]
+name = "lecture2quiz"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "rover0811",email = "rover0811@hotmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.12, <4.0"
+dependencies = [
+    "konlpy (>=0.6.0,<0.7.0)",
+    "scikit-learn (>=1.6.1,<2.0.0)",
+    "google-cloud-aiplatform (>=1.91.0,<2.0.0)",
+    "google-genai (>=1.13.0,<2.0.0)",
+    "pinecone (>=6.0.2,<7.0.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
