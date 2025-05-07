@@ -9,8 +9,8 @@ terraform {
 
 provider "google" {
   project     = var.project_id
-  region      = "asia-northeast3"
-  zone        = "asia-northeast3-a"
+  region      = "us-central1"
+  zone        = "us-central1-a"
   credentials = file("lecture2quiz-672159eb71a8.json")  # 서비스 계정 키 파일 경로
 }
 
@@ -51,7 +51,7 @@ resource "google_compute_instance" "spring_app_instance" {
   metadata_startup_script = <<-EOT
     #!/bin/bash
     apt-get update
-    apt-get install -y openjdk-17-jdk
+    apt-get install -y openjdk-21-jdk
   EOT
 
   # 프리티어 요구사항을 충족하기 위한 태그
