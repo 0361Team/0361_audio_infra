@@ -10,8 +10,8 @@ from typing import Dict, Any, Optional
 import numpy as np
 
 # WhisperLive 모듈 임포트
-from whisperlive.transcriber import WhisperLiveASR
-from whisperlive.audio_processing import AudioProcessor
+from whisper_live.transcriber import WhisperLiveASR
+from whisper_live.audio_processing import AudioProcessor
 
 from google.cloud import storage
 from google.oauth2 import service_account
